@@ -93,7 +93,7 @@ public class MainActivity extends Activity implements SensorEventListener {
                 ArrayList<float[]> copiedTap = new ArrayList<>(getEvents());
                 ArrayList<float[]> copied = new ArrayList<>(getEvents());
                 copied = removeValues(8, copied);
-                //copiedTap = removeValues(#ofmeasurementswhith high sampling frequency, copiedTap);
+                copiedTap = removeValues(90, copiedTap);
                 List<Double[]> windowForTapClassification = convertToWindow(copiedTap);
                 ResVal resValForTapClassification = new ResVal(windowForTapClassification).invoke();
                 Instances unlabeledTap = getInstances();
@@ -123,7 +123,9 @@ public class MainActivity extends Activity implements SensorEventListener {
                 }
 
                 //TODO: only used some of the data
-
+                //extracting every ninth element to account for the extra measurements
+                //needed to detect tapping
+                copied = extractEveryNinthMeasurement(copied);
                 //do the state calculation
                 List<Double[]> windows = convertToWindow(copied);
 
@@ -236,14 +238,16 @@ public class MainActivity extends Activity implements SensorEventListener {
         String currentState = instance.stringValue(instance.classIndex());
 
         playNewStateToUser(currentState);
-        //Increase sampling frequency
+        //Decrease sampling frequency
         mSensorManager.unregisterListener(this);
-        mSensorManager.registerListener(this, mAccelerometer, SensorManager.SENSOR_DELAY_FASTEST);
+        mSensorManager.registerListener(this, mAccelerometer, SensorManager.SENSOR_DELAY_NORMAL);
         showPredictionView.setText(text);
         //remove the invalid prediction
         stateHistory.remove(stateHistory.size()-1);
         stateHistory.add(instance.classValue());
 
+        //TODO: update sound to something with recalculation
+        playSound(R.raw.still);
 
         //Save the new prediction in the statecounter
         if(stateCounter.containsKey(currentState)){
@@ -254,20 +258,6 @@ public class MainActivity extends Activity implements SensorEventListener {
 
         if(stateHistory.size() > 5)
             stateHistory.remove(0);
-    }
-
-    private void playNewStateToUser(String currentState) {
-        switch (currentState) {
-            case "still":
-                playSound(R.raw.still);
-                break;
-            case "lowenergy":
-                playSound(R.raw.lowenergy);
-                break;
-            default:
-                playSound(R.raw.highenergy);
-                break;
-        }
     }
 
     private void updateViewWithNewPrediction(Instance prediction){
@@ -293,6 +283,30 @@ public class MainActivity extends Activity implements SensorEventListener {
 
         if(stateHistory.size() > 5)
             stateHistory.remove(0);
+    }
+
+    private void playNewStateToUser(String currentState) {
+        switch (currentState) {
+            case "still":
+                playSound(R.raw.still);
+                break;
+            case "lowenergy":
+                playSound(R.raw.lowenergy);
+                break;
+            default:
+                playSound(R.raw.highenergy);
+                break;
+        }
+
+    }
+
+    private ArrayList<float[]> extractEveryNinthMeasurement(ArrayList<float[]> copied) {
+        ArrayList<float[]> res = new ArrayList<>();
+        for (int i = 0; i < copied.size(); i++) {
+            if (i % 9 == 0)
+                res.add(copied.get(i));
+        }
+        return res;
     }
 
     private void saveDistribution(double[] dist) {
