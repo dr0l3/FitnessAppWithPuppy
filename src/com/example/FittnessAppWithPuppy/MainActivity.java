@@ -82,14 +82,85 @@ public class MainActivity extends Activity implements SensorEventListener {
         mTimer.scheduleAtFixedRate(new TimerTask() {
             @Override
             public void run() {
+                if(checkingForTap)
+                    checkForTapStateCalculation();
+                else
+                    normalStateCalculation();
+            }
 
+            private void checkForTapStateCalculation(){
+                //calculate the values
+                ArrayList<float[]> copiedTap = new ArrayList<>(getEvents());
+                ArrayList<float[]> copied = new ArrayList<>(getEvents());
+                copied = removeValues(8, copied);
+                //copiedTap = removeValues(#ofmeasurementswhith high sampling frequency, copiedTap);
+                List<Double[]> windowForTapClassification = convertToWindow(copiedTap);
+                ResVal resValForTapClassification = new ResVal(windowForTapClassification).invoke();
+                Instances unlabeledTap = getInstances();
+                unlabeledTap.add(buildDataToBeClassified(resValForTapClassification));
+                Instances labeledTap = new Instances(unlabeledTap);
+
+                //Classify whether tap data into {Tap, NoTap}
+                try {
+                    Instance ins = unlabeledTap.instance(0);
+                    double label = classifier.classifyInstance(ins);
+                    //TODO: Figure out how big the threshhold should be
+                    /*double[] dist = classifier.distributionForInstance(ins);
+                    saveDistribution(dist);
+                    double highestProb = 0;
+                    int indexOfHighest = -1;
+                    for (int i = 0; i < dist.length; i++) {
+                        if (highestProb < dist[i]) {
+                            highestProb = dist[i];
+                            indexOfHighest = i;
+                        }
+                    }*/
+
+                    labeledTap.instance(0).setClassValue(label);
+
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+
+                //TODO: only used some of the data
+
+                //do the state calculation
+                List<Double[]> windows = convertToWindow(copied);
+
+                ResVal resVal = new ResVal(windows).invoke();
+
+                //Setup the classification
+                Instances unlabeled = getInstances();
+                unlabeled.add(buildDataToBeClassified(resVal));
+                Instances labeled = new Instances(unlabeled);
+
+                //do the classification
+                labeled = doTheClassification(unlabeled, labeled);
+
+                //update the view
+                final Instances finalLabeled = labeled;
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        double classification =finalLabeled.firstInstance().classValue();
+                        //Not tapped
+                        if(classification < 0.5){
+                            updateViewWithNewPrediction(finalLabeled.firstInstance());
+                        //tapped
+                        } else {
+                            updateViewAndHandleTap(finalLabeled.firstInstance());
+                        }
+                        printLabeledInstance(finalLabeled.firstInstance());
+                    }
+                });
+            }
+
+            /**
+             * More or less done
+             * */
+            private void normalStateCalculation(){
                 //calculate the values
                 ArrayList<float[]> copied = new ArrayList<>(getEvents());
-                //TODO: Need to both detect taps and state changes here
-                //TODO: need to recalculate no matter what
-                //TODO: Check tap first
-                //TODO: if tap then silently recalculate state
-                //TODO: else do it loudly
                 copied = removeValues(8, copied);
                 List<Double[]> windows = convertToWindow(copied);
 
@@ -100,7 +171,24 @@ public class MainActivity extends Activity implements SensorEventListener {
                 unlabeled.add(buildDataToBeClassified(resVal));
                 Instances labeled = new Instances(unlabeled);
 
-                //do the classificaiton
+                //do the classification
+                labeled = doTheClassification(unlabeled,labeled);
+
+                //update the view
+                final Instances finalLabeled = labeled; //need to make variable final
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        updateViewWithNewPrediction(finalLabeled.firstInstance());
+                        printLabeledInstance(finalLabeled.firstInstance());
+                    }
+                });
+            }
+
+            /**
+             * Works fine
+             * */
+            private Instances doTheClassification(Instances unlabeled, Instances labeled) {
                 try {
                     Instance ins = unlabeled.instance(0);
                     double label = classifier.classifyInstance(ins);
@@ -138,17 +226,73 @@ public class MainActivity extends Activity implements SensorEventListener {
                 } catch (Exception e) {
                     e.printStackTrace();
                 }
-
-                //update the view
-                runOnUiThread(new Runnable() {
-                    @Override
-                    public void run() {
-                        updateViewWithNewPrediction(labeled.firstInstance());
-                        printLabeledInstance(labeled.firstInstance());
-                    }
-                });
+                return labeled;
             }
         }, WINDOW_SIZE_IN_MILISECONDS, WINDOW_SIZE_IN_MILISECONDS*OVERLAP_IN_PERCENT/100);
+    }
+
+    private void updateViewAndHandleTap(Instance instance) {
+        String text = instance.toString(); //the prediction and the data used to make it
+        String currentState = instance.stringValue(instance.classIndex());
+
+        playNewStateToUser(currentState);
+        //Increase sampling frequency
+        mSensorManager.unregisterListener(this);
+        mSensorManager.registerListener(this, mAccelerometer, SensorManager.SENSOR_DELAY_FASTEST);
+        showPredictionView.setText(text);
+        //remove the invalid prediction
+        stateHistory.remove(stateHistory.size()-1);
+        stateHistory.add(instance.classValue());
+
+
+        //Save the new prediction in the statecounter
+        if(stateCounter.containsKey(currentState)){
+            stateCounter.put(currentState, stateCounter.get(currentState)+1);
+        } else {
+            stateCounter.put(currentState, 0);
+        }
+
+        if(stateHistory.size() > 5)
+            stateHistory.remove(0);
+    }
+
+    private void playNewStateToUser(String currentState) {
+        switch (currentState) {
+            case "still":
+                playSound(R.raw.still);
+                break;
+            case "lowenergy":
+                playSound(R.raw.lowenergy);
+                break;
+            default:
+                playSound(R.raw.highenergy);
+                break;
+        }
+    }
+
+    private void updateViewWithNewPrediction(Instance prediction){
+        String text = prediction.toString(); //the prediction and the data used to make it
+        String previousText = (String) showPredictionView.getText();
+        String previousState = getState(previousText);
+        String currentState = prediction.stringValue(prediction.classIndex());
+        if( !currentState.equals(previousState)) {
+            playNewStateToUser(currentState);
+            //Increase sampling frequency
+            mSensorManager.unregisterListener(this);
+            mSensorManager.registerListener(this, mAccelerometer, SensorManager.SENSOR_DELAY_FASTEST);
+        }
+        showPredictionView.setText(text);
+        stateHistory.add(prediction.classValue());
+
+        //Save the new prediction in the statecounter
+        if(stateCounter.containsKey(currentState)){
+            stateCounter.put(currentState, stateCounter.get(currentState)+1);
+        } else {
+            stateCounter.put(currentState, 0);
+        }
+
+        if(stateHistory.size() > 5)
+            stateHistory.remove(0);
     }
 
     private void saveDistribution(double[] dist) {
@@ -250,42 +394,6 @@ public class MainActivity extends Activity implements SensorEventListener {
             ret.add(temp);
         }
         return ret;
-    }
-
-    private void updateViewWithNewPrediction(Instance prediction){
-        String text = prediction.toString(); //the prediction and the data used to make it
-        String previousText = (String) showPredictionView.getText();
-        String previousState = getState(previousText);
-        String currentState = prediction.stringValue(prediction.classIndex());
-//        System.out.println(prediction + " " + currentState);
-        if( !currentState.equals(previousState)) {
-            switch (currentState) {
-                case "still":
-                    playSound(R.raw.still);
-                    break;
-                case "lowenergy":
-                    playSound(R.raw.lowenergy);
-                    break;
-                default:
-                    playSound(R.raw.highenergy);
-                    break;
-            }
-            //TODO: higher sampling frequency
-        }
-        showPredictionView.setText(text);
-        stateHistory.add(prediction.classValue());
-
-        //Save the new prediction in the statecounter
-        //Much elegant javacode, very clap... :|
-        if(stateCounter.containsKey(currentState)){
-            stateCounter.put(currentState, stateCounter.get(currentState)+1);
-        } else {
-            stateCounter.put(currentState, 0);
-        }
-
-        if(stateHistory.size() > 5)
-            stateHistory.remove(0);
-//        System.out.println("Statehistorysize = "+stateHistory.size());
     }
 
     private String getState(String previousText) {
